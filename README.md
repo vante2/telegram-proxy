@@ -15,3 +15,17 @@
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/vante2/telegram-proxy/main/setup.sh)
+
+### 🔑 Как посмотреть ссылку, если забыл
+
+Секрет и полная ссылка сохраняются на сервере:
+
+```bash
+# Показать полную ссылку для Telegram
+cat /root/mtproxy-telemt/proxy-link.txt
+
+# Показать только секрет
+cat /root/mtproxy-telemt/secret.txt
+
+# Или посмотреть логи контейнера
+docker compose logs -n 20 | grep -i "proxy"

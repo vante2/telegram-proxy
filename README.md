@@ -35,4 +35,4 @@ ss -tulpn | grep :443               # Проверка порта 443
 curl -s -o /dev/null -w "%{http_code}" --resolve твой-домен:443:твой-ip https://твой-домен/  # Проверка маскировки
 
 # 7️ ПОЛНОЕ УДАЛЕНИЕ
-docker-compose down && rm -rf /root/mtproxy-telemt
+(cd /root/mtproxy-telemt && docker-compose down 2>/dev/null || true) && rm -rf /root/mtproxy-telemt && echo "✅ Очистка завершена. Готов к установке."

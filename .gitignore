@@ -1,0 +1,10 @@
+# Конфиги с секретами — не загружать в репо!
+telemt.toml
+docker-compose.yml
+
+# Логи
+*.log
+
+# Системные файлы
+.DS_Store
+Thumbs.db

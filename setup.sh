@@ -1,83 +1,86 @@
 #!/usr/bin/env bash
-# Telemt Auto - MTProxy with TLS masking
-# Clean version - no backticks, simple syntax
+# Telemt Auto — Автоматическая установка MTProxy с TLS-маскировкой
+# Версия: чистый Bash, русский интерфейс, красивое оформление
 
 set -uo pipefail
 export LANG=C.UTF-8
 
-# Colors
+# === Цвета и функции вывода ===
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 RED='\033[0;31m'
 NC='\033[0m'
 
-log() { echo -e "${GREEN}[OK]${NC} $1"; }
+log() { echo -e "${GREEN}[✓]${NC} $1"; }
 warn() { echo -e "${YELLOW}[!]${NC} $1"; }
-err() { echo -e "${RED}[ERR]${NC} $1"; exit 1; }
+err() { echo -e "${RED}[]${NC} $1"; exit 1; }
 
+# === Базовые переменные ===
 WORKDIR="/root/mtproxy-telemt"
 IMAGE="whn0thacked/telemt-docker:latest"
 
-echo "Telemt Auto - MTProxy setup"
-echo "==========================="
+# === Заголовок ===
+echo ""
+echo -e " ${GREEN}Telemt Auto${NC} — Установка MTProxy"
+echo "=================================="
 
-# 1. Get public IP
-log "Detecting public IP..."
+# === 1. Определение публичного IP ===
+log "Определяю публичный IP..."
 PUBLIC_IP=""
 for url in "https://ifconfig.me" "https://ipinfo.io/ip" "https://icanhazip.com"; do
     PUBLIC_IP=$(curl -s --max-time 5 "$url" 2>/dev/null | tr -d '[:space:]') && break
 done
 if [ -z "$PUBLIC_IP" ] || ! echo "$PUBLIC_IP" | grep -qE '^[0-9.]+$'; then
-    err "Could not detect IP. Check internet connection."
+    err "Не удалось определить IP. Проверь интернет-соединение."
 fi
-log "Your IP: $PUBLIC_IP"
+log "Твой IP: $PUBLIC_IP"
 
-# 2. Get domain
+# === 2. Ввод домена для маскировки ===
 echo ""
-read -rp "Enter domain for masking (e.g. example.com): " DOMAIN
+read -rp "🎭 Введите домен для маскировки (например, example.com): " DOMAIN
 DOMAIN=$(echo "$DOMAIN" | tr -d '\r' | xargs)
 if [ -z "$DOMAIN" ]; then
-    err "Domain cannot be empty."
+    err "Домен не может быть пустым."
 fi
-log "Masking as: $DOMAIN"
+log "Маскируемся под: $DOMAIN"
 
-# 3. Generate secret
+# === 3. Генерация секрета ===
 SECRET=$(openssl rand -hex 16)
-warn "Secret: $SECRET (SAVE IT!)"
+warn "🔑 Секрет: $SECRET (обязательно сохрани!)"
 
-# 4. Domain to hex
+# === 4. Конвертация домена в HEX (для ссылки) ===
 DOMAIN_HEX=$(printf '%s' "$DOMAIN" | od -An -tx1 | tr -d ' \n')
 
-# 5. Install Docker if needed
+# === 5. Установка Docker и docker-compose ===
 if ! command -v docker >/dev/null 2>&1; then
-    log "Installing Docker..."
+    log "Устанавливаю Docker..."
     apt update -qq >/dev/null 2>&1
     apt install -y -qq curl >/dev/null 2>&1
     curl -fsSL https://get.docker.com | sh >/dev/null 2>&1
 fi
 
-# Install docker-compose if needed
+# Проверяем наличие docker-compose (v1 или v2)
 if ! command -v docker-compose >/dev/null 2>&1; then
     if ! docker compose version >/dev/null 2>&1; then
-        log "Installing docker-compose..."
+        log "Устанавливаю docker-compose..."
         apt install -y -qq docker-compose >/dev/null 2>&1 || true
     fi
 fi
 
-# Determine compose command
+# Определяем актуальную команду
 if docker compose version >/dev/null 2>&1; then
     COMPOSE_CMD="docker compose"
 else
     COMPOSE_CMD="docker-compose"
 fi
-log "Using: $COMPOSE_CMD"
+log "Использую: $COMPOSE_CMD"
 
-# Start Docker
+# Запускаем демон Docker
 systemctl enable --now docker >/dev/null 2>&1 || service docker start >/dev/null 2>&1 || true
 sleep 2
 
-# 6. Create configs
-log "Creating configs..."
+# === 6. Создание конфигурационных файлов ===
+log "Создаю конфигурационные файлы..."
 mkdir -p "$WORKDIR"
 cd "$WORKDIR"
 
@@ -139,69 +142,69 @@ services:
       - /tmp:rw,nosuid,nodev,noexec,size=16m
 YML_EOF
 
-# 7. Pull image
-log "Pulling image..."
-docker pull "$IMAGE" >/dev/null 2>&1 || err "Failed to pull image"
+# === 7. Скачивание образа ===
+log "Скачиваю образ прокси..."
+docker pull "$IMAGE" >/dev/null 2>&1 || err "❌ Не удалось скачать образ. Проверь интернет."
 
-# 8. Start container
-log "Starting container..."
+# === 8. Запуск контейнера ===
+log "Запускаю контейнер..."
 if ! $COMPOSE_CMD up -d 2>&1; then
-    err "Failed to start container. Run: $COMPOSE_CMD logs"
+    err "❌ Ошибка запуска. Подробности: $COMPOSE_CMD logs"
 fi
 sleep 12
 
-# 9. Build proxy link
+# === 9. Формирование и сохранение ссылки ===
 FULL_SECRET="ee${SECRET}${DOMAIN_HEX}"
 PROXY_LINK="tg://proxy?server=${PUBLIC_IP}&port=443&secret=${FULL_SECRET}"
 
-# 10. Save to files
 echo "$SECRET" > "$WORKDIR/secret.txt"
 echo "$PROXY_LINK" > "$WORKDIR/proxy-link.txt"
 chmod 600 "$WORKDIR/secret.txt" "$WORKDIR/proxy-link.txt"
 
-# 11. Final output
+# === 10. Красивый вывод результата ===
 echo ""
-echo "========================================"
-echo "  DONE! MTProxy is ready"
-echo "========================================"
-echo "  IP:     $PUBLIC_IP"
-echo "  Domain: $DOMAIN"
-echo ""
-echo "  Telegram link:"
-echo "  $PROXY_LINK"
-echo ""
-echo "  Files saved in: $WORKDIR"
-echo "    - proxy-link.txt (full link)"
-echo "    - secret.txt (secret only)"
-echo ""
-echo "  View link later: cat $WORKDIR/proxy-link.txt"
-echo "========================================"
+echo "════════════════════════════════════════════╗"
+echo "║  🎉 Готово! MTProxy успешно настроен      ║"
+echo "╠════════════════════════════════════════════╣"
+echo "║   IP:     $PUBLIC_IP"
+echo "║  🎭 Домен:  $DOMAIN"
+echo "║                                            ║"
+echo "║  🔗 Ссылка для Telegram:                  ║"
+echo "║  $PROXY_LINK"
+echo "║                                            ║"
+echo "║  📁 Файлы сохранены в: $WORKDIR"
+echo "║     • proxy-link.txt — полная ссылка      ║"
+echo "║     • secret.txt     — только секрет      ║"
+echo "║                                            ║"
+echo "║   Посмотреть ссылку позже:              ║"
+echo "║     cat $WORKDIR/proxy-link.txt           ║"
+echo "╚════════════════════════════════════════════╝"
 echo ""
 
-# 12. Checks
-log "Running checks..."
+# === 11. Финальные проверки ===
+log "Запускаю проверки работоспособности..."
 
-# Masking check
+# Проверка маскировки
 HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --resolve "${DOMAIN}:443:${PUBLIC_IP}" "https://${DOMAIN}/" 2>/dev/null || echo "000")
 if echo "$HTTP_CODE" | grep -qE '^(2|3)'; then
-    log "Masking OK (HTTP $HTTP_CODE)"
+    log "✅ Маскировка работает (HTTP $HTTP_CODE)"
 else
-    warn "Masking: HTTP $HTTP_CODE"
+    warn "⚠️  Маскировка: получен код $HTTP_CODE (DNS/TLS кэш может обновляться)"
 fi
 
-# Port check
+# Проверка порта
 if ss -tulpn 2>/dev/null | grep -q ":443 "; then
-    log "Port 443 is open"
+    log "✅ Порт 443 открыт и слушается"
 else
-    warn "Port 443 not found"
+    warn "⚠️  Порт 443 не найден. Открой его: ufw allow 443/tcp"
 fi
 
-# Container check
+# Проверка контейнера
 if $COMPOSE_CMD ps 2>/dev/null | grep -q "Up"; then
-    log "Container is running"
+    log "✅ Контейнер работает в фоне"
 else
-    warn "Container status unknown"
+    warn "️  Статус контейнера неизвестен. Проверь: $COMPOSE_CMD ps"
 fi
 
 echo ""
-log "All done! Connect in Telegram"
+log "Всё готово! Подключай прокси в Telegram 🚀"

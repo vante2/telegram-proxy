@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Telemt Auto — Автоматическая установка MTProxy с TLS-маскировкой
-# Версия: проверки Docker, таймауты, русский интерфейс
+# Версия: проверки Docker, таймауты, русский интерфейс, исправленный YAML
 
 set -uo pipefail
 export LANG=C.UTF-8
@@ -155,14 +155,16 @@ enabled = true
 weight = 10
 TOML_EOF
 
-cat > docker-compose.yml << YML_EOF
+# === ИСПРАВЛЕННЫЙ docker-compose.yml ===
+cat > docker-compose.yml << 'YML_EOF'
+version: '3.8'
 services:
   telemt:
-    image: $IMAGE
+    image: whn0thacked/telemt-docker:latest
     container_name: telemt
     restart: unless-stopped
     environment:
-      RUST_LOG: "info"
+      - RUST_LOG=info
     volumes:
       - ./telemt.toml:/etc/telemt.toml:ro
     ports:

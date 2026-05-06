@@ -1,10 +1,12 @@
 # Конфиги с секретами — не загружать в репо!
 telemt.toml
 docker-compose.yml
+secret.txt
+proxy-link.txt
 
 # Логи
 *.log
 
-# Системные файлы
+# Системные
 .DS_Store
 Thumbs.db

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Telemt Auto — Автоматическая установка MTProxy с TLS-маскировкой
-# Версия: исправлена кодировка ввода домена
+# Версия: без указания версии docker-compose (максимальная совместимость)
 
 set -uo pipefail
 export LANG=C.UTF-8
@@ -42,7 +42,6 @@ log "Твой IP: $PUBLIC_IP"
 echo ""
 printf "🎭 Введите домен для маскировки (например, example.com): "
 read -r DOMAIN
-# Очистка: только \r и пробелы по краям, БЕЗ xargs (он ломает UTF-8)
 DOMAIN="${DOMAIN%$'\r'}"
 DOMAIN="${DOMAIN#"${DOMAIN%%[![:space:]]*}"}"
 DOMAIN="${DOMAIN%"${DOMAIN##*[![:space:]]}"}"
@@ -155,8 +154,8 @@ enabled = true
 weight = 10
 TOML_EOF
 
+# === docker-compose.yml БЕЗ указания версии (совместимость) ===
 cat > docker-compose.yml << 'YML_EOF'
-version: '3.8'
 services:
   telemt:
     image: whn0thacked/telemt-docker:latest

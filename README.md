@@ -29,19 +29,6 @@ docker-compose down                 # Остановка
 docker-compose up -d                # Запуск после остановки
 docker-compose pull && docker-compose up -d  # Обновление до новой версии
 
-# 4️ СМЕНА ДОМЕНА МАСКИРОВКИ
-# Останови: docker-compose down
-# Открой: nano telemt.toml → замени tls_domain = "новый-домен"
-# Пересчитай HEX: echo -n "новый-домен" | od -An -tx1 | tr -d ' \n'
-# Собери ссылку: tg://proxy?server=ТВОЙ_IP&port=443&secret=ee[СЕКРЕТ][НОВЫЙ_ХЕКС]
-# Запусти: docker-compose up -d
-
-# 5️ СМЕНА СЕКРЕТА
-# Сгенерируй: openssl rand -hex 16
-# Открой: nano telemt.toml → замени user1 = "новый_секрет"
-# Перезапусти: docker-compose restart
-# ⚠️ Старая ссылка перестанет работать!
-
 # 6️⃣ ДИАГНОСТИКА
 docker-compose ps                   # Статус контейнера (должно быть "Up")
 ss -tulpn | grep :443               # Проверка порта 443

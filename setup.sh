@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Telemt Auto — Автоматическая установка MTProxy с TLS-маскировкой
-# Версия: чистый Bash, русский интерфейс, локальное определение IP
+# Версия: проверки Docker, таймауты, русский интерфейс
 
 set -uo pipefail
 export LANG=C.UTF-8
@@ -24,22 +24,20 @@ echo ""
 echo -e " ${GREEN}Telemt Auto${NC} — Установка MTProxy"
 echo "=================================="
 
-# === 1. Определение IP (локально, через терминал Ubuntu) ===
+# === 1. Определение IP (локально) ===
 log "Определяю IP-адрес сервера..."
-# hostname -I возвращает все назначенные IP, берём первый (основной)
 PUBLIC_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
 
-# Если hostname -I не сработал, используем современную утилиту ip
 if [ -z "$PUBLIC_IP" ]; then
     PUBLIC_IP=$(ip -4 addr show scope global 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -n 1)
 fi
 
 if [ -z "$PUBLIC_IP" ] || ! echo "$PUBLIC_IP" | grep -qE '^[0-9.]+$'; then
-    err "Не удалось определить IP через терминал. Проверь сетевые настройки."
+    err "Не удалось определить IP. Проверь сетевые настройки."
 fi
 log "Твой IP: $PUBLIC_IP"
 
-# === 2. Ввод домена для маскировки ===
+# === 2. Ввод домена ===
 echo ""
 read -rp "🎭 Введите домен для маскировки (например, example.com): " DOMAIN
 DOMAIN=$(echo "$DOMAIN" | tr -d '\r' | xargs)
@@ -52,26 +50,62 @@ log "Маскируемся под: $DOMAIN"
 SECRET=$(openssl rand -hex 16)
 warn "🔑 Секрет: $SECRET (обязательно сохрани!)"
 
-# === 4. Конвертация домена в HEX (для ссылки) ===
+# === 4. Конвертация домена в HEX ===
 DOMAIN_HEX=$(printf '%s' "$DOMAIN" | od -An -tx1 | tr -d ' \n')
 
-# === 5. Установка Docker и docker-compose ===
-if ! command -v docker >/dev/null 2>&1; then
+# === 5. Проверка и установка Docker ===
+if command -v docker >/dev/null 2>&1; then
+    log "Docker уже установлен ($(docker --version | cut -d' ' -f3))"
+else
     log "Устанавливаю Docker..."
+    if fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; then
+        warn "⚠️  dpkg заблокирован. Жду 30 секунд..."
+        sleep 30
+    fi
+    
     apt update -qq >/dev/null 2>&1
     apt install -y -qq curl >/dev/null 2>&1
-    curl -fsSL https://get.docker.com | sh >/dev/null 2>&1
+    curl -fsSL https://get.docker.com | bash >/dev/null 2>&1
+    log "Docker установлен"
 fi
 
-# Проверяем наличие docker-compose (v1 или v2)
-if ! command -v docker-compose >/dev/null 2>&1; then
-    if ! docker compose version >/dev/null 2>&1; then
-        log "Устанавливаю docker-compose..."
-        apt install -y -qq docker-compose >/dev/null 2>&1 || true
+# === Проверка и установка docker-compose ===
+COMPOSE_INSTALLED=false
+
+if command -v docker-compose >/dev/null 2>&1; then
+    log "docker-compose уже установлен ($(docker-compose --version | cut -d' ' -f3))"
+    COMPOSE_INSTALLED=true
+elif docker compose version >/dev/null 2>&1; then
+    log "Docker Compose v2 уже установлен"
+    COMPOSE_INSTALLED=true
+fi
+
+if [ "$COMPOSE_INSTALLED" = false ]; then
+    log "Устанавливаю docker-compose..."
+    
+    if fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; then
+        warn "⚠️  dpkg заблокирован. Жду 30 секунд..."
+        sleep 30
+    fi
+    
+    timeout 60 apt install -y -qq docker-compose >/dev/null 2>&1 && COMPOSE_INSTALLED=true
+    
+    if [ "$COMPOSE_INSTALLED" = false ]; then
+        warn "⚠️  Не удалось через apt. Скачиваю бинарник..."
+        curl -fsSL "https://github.com/docker/compose/releases/download/1.29.2/docker-compose-$(uname -s)-$(uname -m)" \
+            -o /usr/local/bin/docker-compose 2>/dev/null && \
+        chmod +x /usr/local/bin/docker-compose && \
+        COMPOSE_INSTALLED=true
+    fi
+    
+    if [ "$COMPOSE_INSTALLED" = true ]; then
+        log "docker-compose установлен"
+    else
+        err "❌ Не удалось установить docker-compose. Установи вручную: apt install docker-compose"
     fi
 fi
 
-# Определяем актуальную команду
+# Определяем команду
 if docker compose version >/dev/null 2>&1; then
     COMPOSE_CMD="docker compose"
 else
@@ -79,11 +113,11 @@ else
 fi
 log "Использую: $COMPOSE_CMD"
 
-# Запускаем демон Docker
+# Запускаем Docker
 systemctl enable --now docker >/dev/null 2>&1 || service docker start >/dev/null 2>&1 || true
 sleep 2
 
-# === 6. Создание конфигурационных файлов ===
+# === 6. Создание конфигов ===
 log "Создаю конфигурационные файлы..."
 mkdir -p "$WORKDIR"
 cd "$WORKDIR"
@@ -155,7 +189,7 @@ if ! $COMPOSE_CMD up -d 2>&1; then
 fi
 sleep 12
 
-# === 9. Формирование и сохранение ссылки ===
+# === 9. Формирование ссылки ===
 FULL_SECRET="ee${SECRET}${DOMAIN_HEX}"
 PROXY_LINK="tg://proxy?server=${PUBLIC_IP}&port=443&secret=${FULL_SECRET}"
 
@@ -163,7 +197,7 @@ echo "$SECRET" > "$WORKDIR/secret.txt"
 echo "$PROXY_LINK" > "$WORKDIR/proxy-link.txt"
 chmod 600 "$WORKDIR/secret.txt" "$WORKDIR/proxy-link.txt"
 
-# === 10. Красивый вывод результата ===
+# === 10. Итоговый вывод ===
 echo ""
 echo "════════════════════════════════════════════╗"
 echo "║   Готово! MTProxy успешно настроен      "
@@ -183,26 +217,26 @@ echo "║     cat $WORKDIR/proxy-link.txt           ║"
 echo "╚════════════════════════════════════════════╝"
 echo ""
 
-# === 11. Финальные проверки ===
-log "Запускаю проверки работоспособности..."
+# === 11. Проверки ===
+log "Запускаю проверки..."
 
 HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --resolve "${DOMAIN}:443:${PUBLIC_IP}" "https://${DOMAIN}/" 2>/dev/null || echo "000")
 if echo "$HTTP_CODE" | grep -qE '^(2|3)'; then
     log "✅ Маскировка работает (HTTP $HTTP_CODE)"
 else
-    warn "⚠️  Маскировка: получен код $HTTP_CODE (DNS/TLS кэш может обновляться)"
+    warn "⚠️  Маскировка: HTTP $HTTP_CODE (DNS/TLS кэш может обновляться)"
 fi
 
 if ss -tulpn 2>/dev/null | grep -q ":443 "; then
-    log "✅ Порт 443 открыт и слушается"
+    log "✅ Порт 443 открыт"
 else
-    warn "⚠️  Порт 443 не найден. Открой его: ufw allow 443/tcp"
+    warn "⚠️  Порт 443 не найден. Открой: ufw allow 443/tcp"
 fi
 
 if $COMPOSE_CMD ps 2>/dev/null | grep -q "Up"; then
-    log "✅ Контейнер работает в фоне"
+    log "✅ Контейнер работает"
 else
-    warn "⚠️  Статус контейнера неизвестен. Проверь: $COMPOSE_CMD ps"
+    warn "⚠️  Статус контейнера неизвестен"
 fi
 
 echo ""

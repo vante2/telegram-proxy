@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Telemt Auto — Автоматическая установка MTProxy с TLS-маскировкой
-# Версия: проверки Docker, таймауты, русский интерфейс, исправленный YAML
+# Версия: исправленная проверка маскировки + справочник кодов
 
 set -uo pipefail
 export LANG=C.UTF-8
@@ -62,7 +62,6 @@ else
         warn "⚠️  dpkg заблокирован. Жду 30 секунд..."
         sleep 30
     fi
-    
     apt update -qq >/dev/null 2>&1
     apt install -y -qq curl >/dev/null 2>&1
     curl -fsSL https://get.docker.com | bash >/dev/null 2>&1
@@ -82,14 +81,11 @@ fi
 
 if [ "$COMPOSE_INSTALLED" = false ]; then
     log "Устанавливаю docker-compose..."
-    
     if fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; then
         warn "⚠️  dpkg заблокирован. Жду 30 секунд..."
         sleep 30
     fi
-    
     timeout 60 apt install -y -qq docker-compose >/dev/null 2>&1 && COMPOSE_INSTALLED=true
-    
     if [ "$COMPOSE_INSTALLED" = false ]; then
         warn "⚠️  Не удалось через apt. Скачиваю бинарник..."
         curl -fsSL "https://github.com/docker/compose/releases/download/1.29.2/docker-compose-$(uname -s)-$(uname -m)" \
@@ -97,7 +93,6 @@ if [ "$COMPOSE_INSTALLED" = false ]; then
         chmod +x /usr/local/bin/docker-compose && \
         COMPOSE_INSTALLED=true
     fi
-    
     if [ "$COMPOSE_INSTALLED" = true ]; then
         log "docker-compose установлен"
     else
@@ -155,7 +150,6 @@ enabled = true
 weight = 10
 TOML_EOF
 
-# === ИСПРАВЛЕННЫЙ docker-compose.yml ===
 cat > docker-compose.yml << 'YML_EOF'
 version: '3.8'
 services:
@@ -219,27 +213,49 @@ echo "║     cat $WORKDIR/proxy-link.txt           ║"
 echo "╚════════════════════════════════════════════╝"
 echo ""
 
-# === 11. Проверки ===
+# === 11. Проверки (исправленная логика) ===
 log "Запускаю проверки..."
 
-HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --resolve "${DOMAIN}:443:${PUBLIC_IP}" "https://${DOMAIN}/" 2>/dev/null || echo "000")
-if echo "$HTTP_CODE" | grep -qE '^(2|3)'; then
-    log "✅ Маскировка работает (HTTP $HTTP_CODE)"
-else
-    warn "⚠️  Маскировка: HTTP $HTTP_CODE (DNS/TLS кэш может обновляться)"
-fi
+# Получаем HTTP-код корректно
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --resolve "${DOMAIN}:443:${PUBLIC_IP}" "https://${DOMAIN}/" 2>/dev/null)
+[ -z "$HTTP_CODE" ] && HTTP_CODE="000"
+HTTP_CODE=$(echo "$HTTP_CODE" | tr -d '\n\r' | grep -oE '^[0-9]{3}' || echo "000")
 
+# Вывод с пояснением
+case "$HTTP_CODE" in
+    200) log "✅ Маскировка: сайт отвечает (200 OK)" ;;
+    301|302|307) log "✅ Маскировка: редирект (HTTP $HTTP_CODE)" ;;
+    400|403) warn "🟡 Маскировка: сайт блокирует прямые запросы ($HTTP_CODE), но прокси работает" ;;
+    404|500|502|503) warn "🟡 Маскировка: ошибка сервера ($HTTP_CODE), проверь позже" ;;
+    000) warn "🔴 Маскировка: нет соединения (000) — проверь порт 443 и фаервол" ;;
+    *) warn "⚠️  Маскировка: необычный ответ ($HTTP_CODE)" ;;
+esac
+
+# Проверка порта
 if ss -tulpn 2>/dev/null | grep -q ":443 "; then
     log "✅ Порт 443 открыт"
 else
     warn "⚠️  Порт 443 не найден. Открой: ufw allow 443/tcp"
 fi
 
+# Проверка контейнера
 if $COMPOSE_CMD ps 2>/dev/null | grep -q "Up"; then
     log "✅ Контейнер работает"
 else
     warn "⚠️  Статус контейнера неизвестен"
 fi
+
+# === Справочник кодов (выводим пользователю) ===
+echo ""
+echo "📋 Справочник кодов маскировки:"
+echo "   200    = ✅ Идеально: сайт отвечает нормально"
+echo "   301/302/307 = ✅ Отлично: редирект, маскировка работает"
+echo "   400/403 = 🟡 Нормально: сайт блокирует прямые запросы, но прокси работает"
+echo "   404/5xx = 🟡 Временно: ошибка сервера, попробуй позже"
+echo "   000    = 🔴 Проблема: нет соединения (проверь порт/фаервол)"
+echo ""
+echo "💡 Важно: Даже при 400/403/000 Telegram может подключаться!"
+echo "   Главное — контейнер в статусе 'Up' и порт 443 слушается."
 
 echo ""
 log "Всё готово! Подключай прокси в Telegram 🚀"

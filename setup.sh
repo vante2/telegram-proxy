@@ -1,109 +1,122 @@
-```bash
 #!/usr/bin/env bash
-# 🚀 Telemt Auto — MTProxy с TLS-маскировкой
-# Финальная версия: авто-установка, сохранение ссылки, совместимость
+# Telemt Auto - MTProxy with TLS masking
+# Clean version - no backticks, simple syntax
 
 set -uo pipefail
 export LANG=C.UTF-8
-export LC_ALL=C.UTF-8 2>/dev/null || true
 
-# Цвета
-GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; NC='\033[0m'
-log() { echo -e "${GREEN}[✓]${NC} $1"; }
+# Colors
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
+NC='\033[0m'
+
+log() { echo -e "${GREEN}[OK]${NC} $1"; }
 warn() { echo -e "${YELLOW}[!]${NC} $1"; }
-err() { echo -e "${RED}[✗]${NC} $1"; exit 1; }
+err() { echo -e "${RED}[ERR]${NC} $1"; exit 1; }
 
 WORKDIR="/root/mtproxy-telemt"
 IMAGE="whn0thacked/telemt-docker:latest"
 
-echo "🚀 Telemt Auto — MTProxy за 1 минуту"
-echo "======================================"
-echo ""
+echo "Telemt Auto - MTProxy setup"
+echo "==========================="
 
-# === 1. Авто-определение IP ===
-log "Определяю публичный IP..."
-PUBLIC_IP=$(curl -s --max-time 5 https://ifconfig.me 2>/dev/null || \
-            curl -s --max-time 5 https://ipinfo.io/ip 2>/dev/null || echo "")
-[[ -z "$PUBLIC_IP" || ! "$PUBLIC_IP" =~ ^[0-9.]+$ ]] && err "Не удалось определить IP."
-log "Твой IP: $PUBLIC_IP"
+# 1. Get public IP
+log "Detecting public IP..."
+PUBLIC_IP=""
+for url in "https://ifconfig.me" "https://ipinfo.io/ip" "https://icanhazip.com"; do
+    PUBLIC_IP=$(curl -s --max-time 5 "$url" 2>/dev/null | tr -d '[:space:]') && break
+done
+if [ -z "$PUBLIC_IP" ] || ! echo "$PUBLIC_IP" | grep -qE '^[0-9.]+$'; then
+    err "Could not detect IP. Check internet connection."
+fi
+log "Your IP: $PUBLIC_IP"
 
-# === 2. Ввод домена (чистый ввод) ===
+# 2. Get domain
 echo ""
-read -rp "🎭 Введите домен для маскировки: " DOMAIN
+read -rp "Enter domain for masking (e.g. example.com): " DOMAIN
 DOMAIN=$(echo "$DOMAIN" | tr -d '\r' | xargs)
-[[ -z "$DOMAIN" ]] && err "Домен не может быть пустым."
-log "Маскируемся под: $DOMAIN"
+if [ -z "$DOMAIN" ]; then
+    err "Domain cannot be empty."
+fi
+log "Masking as: $DOMAIN"
 
-# === 3. Генерация секрета ===
+# 3. Generate secret
 SECRET=$(openssl rand -hex 16)
-warn "🔑 Секрет: $SECRET (сохрани!)"
+warn "Secret: $SECRET (SAVE IT!)"
 
-# === 4. HEX домена ===
-DOMAIN_HEX=$(echo -n "$DOMAIN" | od -An -tx1 | tr -d ' \n')
+# 4. Domain to hex
+DOMAIN_HEX=$(printf '%s' "$DOMAIN" | od -An -tx1 | tr -d ' \n')
 
-# === 5. Docker + Compose ===
-if ! command -v docker &>/dev/null; then
-    log "Устанавливаю Docker..."
+# 5. Install Docker if needed
+if ! command -v docker >/dev/null 2>&1; then
+    log "Installing Docker..."
     apt update -qq >/dev/null 2>&1
     apt install -y -qq curl >/dev/null 2>&1
     curl -fsSL https://get.docker.com | sh >/dev/null 2>&1
 fi
 
-# Устанавливаем docker-compose, если нет ни одной версии
-if ! command -v docker-compose &>/dev/null; then
-    if ! docker compose version &>/dev/null 2>&1; then
-        log "Устанавливаю docker-compose..."
-        apt install -y -qq docker-compose >/dev/null 2>&1 || \
-        curl -fsSL "https://github.com/docker/compose/releases/download/1.29.2/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose && \
-        chmod +x /usr/local/bin/docker-compose
+# Install docker-compose if needed
+if ! command -v docker-compose >/dev/null 2>&1; then
+    if ! docker compose version >/dev/null 2>&1; then
+        log "Installing docker-compose..."
+        apt install -y -qq docker-compose >/dev/null 2>&1 || true
     fi
 fi
 
-# Определяем команду
-if docker compose version &>/dev/null 2>&1; then
+# Determine compose command
+if docker compose version >/dev/null 2>&1; then
     COMPOSE_CMD="docker compose"
 else
     COMPOSE_CMD="docker-compose"
 fi
-log "Использую: $COMPOSE_CMD"
+log "Using: $COMPOSE_CMD"
 
-# Запускаем Docker
+# Start Docker
 systemctl enable --now docker >/dev/null 2>&1 || service docker start >/dev/null 2>&1 || true
 sleep 2
 
-# === 6. Конфиги ===
-log "Создаю конфиги..."
+# 6. Create configs
+log "Creating configs..."
 mkdir -p "$WORKDIR"
 cd "$WORKDIR"
 
-cat > telemt.toml << EOF
+# telemt.toml
+cat > telemt.toml << TOML_EOF
 show_link = ["user1"]
+
 [general]
 prefer_ipv6 = false
 fast_mode = true
 use_middle_proxy = true
+
 [general.modes]
 classic = false
 secure = false
 tls = true
+
 [server]
 port = 443
 listen_addr_ipv4 = "0.0.0.0"
 listen_addr_ipv6 = "::"
+
 [censorship]
 tls_domain = "$DOMAIN"
 mask = true
 mask_port = 443
 fake_cert_len = 2048
+
 [access.users]
 user1 = "$SECRET"
+
 [[upstreams]]
 type = "direct"
 enabled = true
 weight = 10
-EOF
+TOML_EOF
 
-cat > docker-compose.yml << EOF
+# docker-compose.yml
+cat > docker-compose.yml << YML_EOF
 services:
   telemt:
     image: $IMAGE
@@ -124,64 +137,71 @@ services:
     read_only: true
     tmpfs:
       - /tmp:rw,nosuid,nodev,noexec,size=16m
-EOF
+YML_EOF
 
-# === 7. Образ ===
-log "Скачиваю образ..."
-docker pull "$IMAGE" >/dev/null 2>&1 || err "❌ Не удалось скачать образ"
+# 7. Pull image
+log "Pulling image..."
+docker pull "$IMAGE" >/dev/null 2>&1 || err "Failed to pull image"
 
-# === 8. Запуск ===
-log "Запускаю контейнер..."
+# 8. Start container
+log "Starting container..."
 if ! $COMPOSE_CMD up -d 2>&1; then
-    echo ""
-    err "❌ Не удалось запустить контейнер!"
-    echo "Проверь: $COMPOSE_CMD logs"
-    exit 1
+    err "Failed to start container. Run: $COMPOSE_CMD logs"
 fi
 sleep 12
 
-# === 9. Формирование ссылки ===
+# 9. Build proxy link
 FULL_SECRET="ee${SECRET}${DOMAIN_HEX}"
 PROXY_LINK="tg://proxy?server=${PUBLIC_IP}&port=443&secret=${FULL_SECRET}"
 
-# === 10. Сохранение на сервере ===
+# 10. Save to files
 echo "$SECRET" > "$WORKDIR/secret.txt"
 echo "$PROXY_LINK" > "$WORKDIR/proxy-link.txt"
 chmod 600 "$WORKDIR/secret.txt" "$WORKDIR/proxy-link.txt"
 
-# === 11. Итоговый вывод ===
+# 11. Final output
 echo ""
-echo "╔════════════════════════════════════════════╗"
-echo "║  🎉 Готово!                               ║"
-echo "╠════════════════════════════════════════════"
-echo "║  🌐 IP:     $PUBLIC_IP"
-echo "║  🎭 Домен:  $DOMAIN"
-echo "║"
-echo "║  🔗 Ссылка для Telegram:"
-echo "║  $PROXY_LINK"
-echo "║"
-echo "║  📁 Файлы сохранены в: $WORKDIR"
-echo "║     • proxy-link.txt — полная ссылка"
-echo "║     • secret.txt     — секрет"
-echo "║"
-echo "║  💡 Посмотреть ссылку позже:"
-echo "║     cat $WORKDIR/proxy-link.txt"
-echo "║"
-echo "║  🔄 Автозапуск: включён"
-echo "╚════════════════════════════════════════════╝"
+echo "========================================"
+echo "  DONE! MTProxy is ready"
+echo "========================================"
+echo "  IP:     $PUBLIC_IP"
+echo "  Domain: $DOMAIN"
+echo ""
+echo "  Telegram link:"
+echo "  $PROXY_LINK"
+echo ""
+echo "  Files saved in: $WORKDIR"
+echo "    - proxy-link.txt (full link)"
+echo "    - secret.txt (secret only)"
+echo ""
+echo "  View link later: cat $WORKDIR/proxy-link.txt"
+echo "========================================"
 echo ""
 
-# === 12. Проверки ===
-log "Проверяю..."
+# 12. Checks
+log "Running checks..."
 
-HTTP=$(curl -s -o /dev/null -w "%{http_code}" \
-    --resolve "${DOMAIN}:443:${PUBLIC_IP}" \
-    "https://${DOMAIN}/" 2>/dev/null || echo "000")
-[[ "$HTTP" =~ ^2|3 ]] && log "✅ Маскировка (HTTP $HTTP)" || warn "⚠️  HTTP $HTTP"
+# Masking check
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --resolve "${DOMAIN}:443:${PUBLIC_IP}" "https://${DOMAIN}/" 2>/dev/null || echo "000")
+if echo "$HTTP_CODE" | grep -qE '^(2|3)'; then
+    log "Masking OK (HTTP $HTTP_CODE)"
+else
+    warn "Masking: HTTP $HTTP_CODE"
+fi
 
-ss -tulpn 2>/dev/null | grep -q ":443 " && log "✅ Порт 443" || warn "⚠️  Порт 443"
+# Port check
+if ss -tulpn 2>/dev/null | grep -q ":443 "; then
+    log "Port 443 is open"
+else
+    warn "Port 443 not found"
+fi
 
-$COMPOSE_CMD ps 2>/dev/null | grep -q "Up" && log "✅ Контейнер работает" || warn "⚠️  Контейнер"
+# Container check
+if $COMPOSE_CMD ps 2>/dev/null | grep -q "Up"; then
+    log "Container is running"
+else
+    warn "Container status unknown"
+fi
 
 echo ""
-log "Всё готово! Подключай прокси в Telegram 🚀"
+log "All done! Connect in Telegram"

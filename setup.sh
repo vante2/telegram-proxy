@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Telemt Auto — Автоматическая установка MTProxy с TLS-маскировкой
-# Версия: чистый Bash, русский интерфейс, красивое оформление
+# Версия: чистый Bash, русский интерфейс, локальное определение IP
 
 set -uo pipefail
 export LANG=C.UTF-8
@@ -13,7 +13,7 @@ NC='\033[0m'
 
 log() { echo -e "${GREEN}[✓]${NC} $1"; }
 warn() { echo -e "${YELLOW}[!]${NC} $1"; }
-err() { echo -e "${RED}[]${NC} $1"; exit 1; }
+err() { echo -e "${RED}[✗]${NC} $1"; exit 1; }
 
 # === Базовые переменные ===
 WORKDIR="/root/mtproxy-telemt"
@@ -24,14 +24,18 @@ echo ""
 echo -e " ${GREEN}Telemt Auto${NC} — Установка MTProxy"
 echo "=================================="
 
-# === 1. Определение публичного IP ===
-log "Определяю публичный IP..."
-PUBLIC_IP=""
-for url in "https://ifconfig.me" "https://ipinfo.io/ip" "https://icanhazip.com"; do
-    PUBLIC_IP=$(curl -s --max-time 5 "$url" 2>/dev/null | tr -d '[:space:]') && break
-done
+# === 1. Определение IP (локально, через терминал Ubuntu) ===
+log "Определяю IP-адрес сервера..."
+# hostname -I возвращает все назначенные IP, берём первый (основной)
+PUBLIC_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+
+# Если hostname -I не сработал, используем современную утилиту ip
+if [ -z "$PUBLIC_IP" ]; then
+    PUBLIC_IP=$(ip -4 addr show scope global 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -n 1)
+fi
+
 if [ -z "$PUBLIC_IP" ] || ! echo "$PUBLIC_IP" | grep -qE '^[0-9.]+$'; then
-    err "Не удалось определить IP. Проверь интернет-соединение."
+    err "Не удалось определить IP через терминал. Проверь сетевые настройки."
 fi
 log "Твой IP: $PUBLIC_IP"
 
@@ -84,7 +88,6 @@ log "Создаю конфигурационные файлы..."
 mkdir -p "$WORKDIR"
 cd "$WORKDIR"
 
-# telemt.toml
 cat > telemt.toml << TOML_EOF
 show_link = ["user1"]
 
@@ -118,7 +121,6 @@ enabled = true
 weight = 10
 TOML_EOF
 
-# docker-compose.yml
 cat > docker-compose.yml << YML_EOF
 services:
   telemt:
@@ -144,7 +146,7 @@ YML_EOF
 
 # === 7. Скачивание образа ===
 log "Скачиваю образ прокси..."
-docker pull "$IMAGE" >/dev/null 2>&1 || err "❌ Не удалось скачать образ. Проверь интернет."
+docker pull "$IMAGE" >/dev/null 2>&1 || err "❌ Не удалось скачать образ."
 
 # === 8. Запуск контейнера ===
 log "Запускаю контейнер..."
@@ -164,9 +166,9 @@ chmod 600 "$WORKDIR/secret.txt" "$WORKDIR/proxy-link.txt"
 # === 10. Красивый вывод результата ===
 echo ""
 echo "════════════════════════════════════════════╗"
-echo "║  🎉 Готово! MTProxy успешно настроен      ║"
+echo "║   Готово! MTProxy успешно настроен      "
 echo "╠════════════════════════════════════════════╣"
-echo "║   IP:     $PUBLIC_IP"
+echo "║  🌐 IP:     $PUBLIC_IP"
 echo "║  🎭 Домен:  $DOMAIN"
 echo "║                                            ║"
 echo "║  🔗 Ссылка для Telegram:                  ║"
@@ -175,8 +177,8 @@ echo "║                                            ║"
 echo "║  📁 Файлы сохранены в: $WORKDIR"
 echo "║     • proxy-link.txt — полная ссылка      ║"
 echo "║     • secret.txt     — только секрет      ║"
-echo "║                                            ║"
-echo "║   Посмотреть ссылку позже:              ║"
+echo "║                                            "
+echo "║  💡 Посмотреть ссылку позже:              ║"
 echo "║     cat $WORKDIR/proxy-link.txt           ║"
 echo "╚════════════════════════════════════════════╝"
 echo ""
@@ -184,7 +186,6 @@ echo ""
 # === 11. Финальные проверки ===
 log "Запускаю проверки работоспособности..."
 
-# Проверка маскировки
 HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --resolve "${DOMAIN}:443:${PUBLIC_IP}" "https://${DOMAIN}/" 2>/dev/null || echo "000")
 if echo "$HTTP_CODE" | grep -qE '^(2|3)'; then
     log "✅ Маскировка работает (HTTP $HTTP_CODE)"
@@ -192,18 +193,16 @@ else
     warn "⚠️  Маскировка: получен код $HTTP_CODE (DNS/TLS кэш может обновляться)"
 fi
 
-# Проверка порта
 if ss -tulpn 2>/dev/null | grep -q ":443 "; then
     log "✅ Порт 443 открыт и слушается"
 else
     warn "⚠️  Порт 443 не найден. Открой его: ufw allow 443/tcp"
 fi
 
-# Проверка контейнера
 if $COMPOSE_CMD ps 2>/dev/null | grep -q "Up"; then
     log "✅ Контейнер работает в фоне"
 else
-    warn "️  Статус контейнера неизвестен. Проверь: $COMPOSE_CMD ps"
+    warn "⚠️  Статус контейнера неизвестен. Проверь: $COMPOSE_CMD ps"
 fi
 
 echo ""

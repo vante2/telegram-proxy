@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# Telemt Auto — Автоматическая установка MTProxy с TLS-маскировкой
-# Версия: стабильная, без ошибок YAML, чистый ввод, русский интерфейс
 
 set -uo pipefail
 export LANG=C.UTF-8
@@ -26,7 +24,7 @@ echo -e " ${GREEN}Telemt Auto${NC} — Установка MTProxy"
 echo "=================================="
 
 # === 1. Определение IP (локально, без внешних запросов) ===
-log "Определяю IP-адрес сервера..."
+log "Получаю IP-адрес сервера..."
 PUBLIC_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
 
 if [ -z "$PUBLIC_IP" ]; then
@@ -53,7 +51,7 @@ log "Маскируемся под: $DOMAIN"
 
 # === 3. Генерация секрета ===
 SECRET=$(openssl rand -hex 16)
-warn "🔑 Секрет: $SECRET (обязательно сохрани!)"
+warn "🔑 Секрет: $SECRET "
 
 # === 4. Конвертация домена в HEX ===
 DOMAIN_HEX=$(printf '%s' "$DOMAIN" | od -An -tx1 | tr -d ' \n')

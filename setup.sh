@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Telemt Auto — Автоматическая установка MTProxy с TLS-маскировкой
-# Версия: повторные попытки проверки, таймауты, русский интерфейс
+# Версия: исправлена кодировка ввода домена
 
 set -uo pipefail
 export LANG=C.UTF-8
+export LC_ALL=C.UTF-8 2>/dev/null || true
 
 # === Цвета и функции вывода ===
 GREEN='\033[0;32m'
@@ -37,10 +38,14 @@ if [ -z "$PUBLIC_IP" ] || ! echo "$PUBLIC_IP" | grep -qE '^[0-9.]+$'; then
 fi
 log "Твой IP: $PUBLIC_IP"
 
-# === 2. Ввод домена ===
+# === 2. Ввод домена (исправленная кодировка) ===
 echo ""
-read -rp "🎭 Введите домен для маскировки (например, example.com): " DOMAIN
-DOMAIN=$(echo "$DOMAIN" | tr -d '\r' | xargs)
+printf "🎭 Введите домен для маскировки (например, example.com): "
+read -r DOMAIN
+# Очистка: только \r и пробелы по краям, БЕЗ xargs (он ломает UTF-8)
+DOMAIN="${DOMAIN%$'\r'}"
+DOMAIN="${DOMAIN#"${DOMAIN%%[![:space:]]*}"}"
+DOMAIN="${DOMAIN%"${DOMAIN##*[![:space:]]}"}"
 if [ -z "$DOMAIN" ]; then
     err "Домен не может быть пустым."
 fi
@@ -183,7 +188,6 @@ log "Запускаю контейнер..."
 if ! $COMPOSE_CMD up -d 2>&1; then
     err "❌ Ошибка запуска. Подробности: $COMPOSE_CMD logs"
 fi
-# Даём контейнеру больше времени на инициализацию TLS
 sleep 20
 
 # === 9. Формирование ссылки ===
@@ -217,40 +221,30 @@ echo ""
 # === 11. Проверки (с повторными попытками) ===
 log "Запускаю проверки..."
 
-# Очищаем переменные от скрытых символов
-DOMAIN_CLEAN=$(echo "$DOMAIN" | tr -d '\r\n\t' | xargs)
-IP_CLEAN=$(echo "$PUBLIC_IP" | tr -d '\r\n\t' | xargs)
+DOMAIN_CLEAN=$(echo "$DOMAIN" | tr -d '\r\n\t')
+IP_CLEAN=$(echo "$PUBLIC_IP" | tr -d '\r\n\t')
 
-# Функция проверки с повторами
 check_masking() {
     local tries=3
     local delay=5
     local code="000"
-    
     for ((i=1; i<=tries; i++)); do
         code=$(curl -s -o /dev/null -w "%{http_code}" \
             --connect-timeout 10 \
             --max-time 15 \
             --resolve "${DOMAIN_CLEAN}:443:${IP_CLEAN}" \
             "https://${DOMAIN_CLEAN}/" 2>/dev/null)
-        
-        # Если получили валидный код 2xx/3xx/4xx — выходим
         if echo "$code" | grep -qE '^[2-5][0-9]{2}$'; then
             echo "$code"
             return 0
         fi
-        
-        # Ждём перед следующей попыткой
         [ $i -lt $tries ] && sleep $delay
     done
-    
-    # Если всё ещё 000 или мусор — возвращаем 000
     echo "000"
 }
 
 HTTP_CODE=$(check_masking)
 
-# Вывод с пояснением
 case "$HTTP_CODE" in
     200) log "✅ Маскировка: сайт отвечает (200 OK)" ;;
     301|302|307) log "✅ Маскировка: редирект (HTTP $HTTP_CODE)" ;;
@@ -260,21 +254,18 @@ case "$HTTP_CODE" in
     *) warn "⚠️  Маскировка: необычный ответ ($HTTP_CODE)" ;;
 esac
 
-# Проверка порта
 if ss -tulpn 2>/dev/null | grep -q ":443 "; then
     log "✅ Порт 443 открыт"
 else
     warn "⚠️  Порт 443 не найден. Открой: ufw allow 443/tcp"
 fi
 
-# Проверка контейнера
 if $COMPOSE_CMD ps 2>/dev/null | grep -q "Up"; then
     log "✅ Контейнер работает"
 else
     warn "⚠️  Статус контейнера неизвестен"
 fi
 
-# === Справочник кодов ===
 echo ""
 echo "📋 Справочник кодов маскировки:"
 echo "   200    = ✅ Идеально: сайт отвечает нормально"

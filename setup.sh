@@ -1,58 +1,47 @@
+```bash
 #!/usr/bin/env bash
 # 🚀 Telemt Auto — MTProxy с TLS-маскировкой
-# Простая версия: минимум магии, максимум надёжности
+# Финальная версия: авто-установка, сохранение ссылки, совместимость
 
-# Не выходим при первой ошибке — будем проверять вручную
 set -uo pipefail
-
-# Локаль для кириллицы
 export LANG=C.UTF-8
 export LC_ALL=C.UTF-8 2>/dev/null || true
 
 # Цвета
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-RED='\033[0;31m'
-NC='\033[0m'
-
-# Простые функции вывода (без %b, чтобы не ломать ввод пользователя)
+GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; NC='\033[0m'
 log() { echo -e "${GREEN}[✓]${NC} $1"; }
 warn() { echo -e "${YELLOW}[!]${NC} $1"; }
 err() { echo -e "${RED}[✗]${NC} $1"; exit 1; }
 
 WORKDIR="/root/mtproxy-telemt"
+IMAGE="whn0thacked/telemt-docker:latest"
 
 echo "🚀 Telemt Auto — MTProxy за 1 минуту"
 echo "======================================"
 echo ""
 
-# === 1. IP ===
+# === 1. Авто-определение IP ===
 log "Определяю публичный IP..."
 PUBLIC_IP=$(curl -s --max-time 5 https://ifconfig.me 2>/dev/null || \
             curl -s --max-time 5 https://ipinfo.io/ip 2>/dev/null || echo "")
-if [[ -z "$PUBLIC_IP" || ! "$PUBLIC_IP" =~ ^[0-9.]+$ ]]; then
-    err "Не удалось определить IP. Проверь интернет."
-fi
+[[ -z "$PUBLIC_IP" || ! "$PUBLIC_IP" =~ ^[0-9.]+$ ]] && err "Не удалось определить IP."
 log "Твой IP: $PUBLIC_IP"
 
-# === 2. Домен (простой read без лишних символов) ===
+# === 2. Ввод домена (чистый ввод) ===
 echo ""
 read -rp "🎭 Введите домен для маскировки: " DOMAIN
-# Убираем возможные пробелы и спецсимволы по краям
 DOMAIN=$(echo "$DOMAIN" | tr -d '\r' | xargs)
-if [[ -z "$DOMAIN" ]]; then
-    err "Домен не может быть пустым."
-fi
+[[ -z "$DOMAIN" ]] && err "Домен не может быть пустым."
 log "Маскируемся под: $DOMAIN"
 
-# === 3. Секрет ===
+# === 3. Генерация секрета ===
 SECRET=$(openssl rand -hex 16)
 warn "🔑 Секрет: $SECRET (сохрани!)"
 
-# === 4. HEX домена (простой способ через od) ===
+# === 4. HEX домена ===
 DOMAIN_HEX=$(echo -n "$DOMAIN" | od -An -tx1 | tr -d ' \n')
 
-# === 5. Docker ===
+# === 5. Docker + Compose ===
 if ! command -v docker &>/dev/null; then
     log "Устанавливаю Docker..."
     apt update -qq >/dev/null 2>&1
@@ -60,19 +49,33 @@ if ! command -v docker &>/dev/null; then
     curl -fsSL https://get.docker.com | sh >/dev/null 2>&1
 fi
 
-# Проверяем, запущен ли Docker
-if ! systemctl is-active --quiet docker 2>/dev/null; then
-    log "Запускаю Docker..."
-    systemctl start docker 2>/dev/null || service docker start 2>/dev/null || true
-    sleep 2
+# Устанавливаем docker-compose, если нет ни одной версии
+if ! command -v docker-compose &>/dev/null; then
+    if ! docker compose version &>/dev/null 2>&1; then
+        log "Устанавливаю docker-compose..."
+        apt install -y -qq docker-compose >/dev/null 2>&1 || \
+        curl -fsSL "https://github.com/docker/compose/releases/download/1.29.2/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose && \
+        chmod +x /usr/local/bin/docker-compose
+    fi
 fi
+
+# Определяем команду
+if docker compose version &>/dev/null 2>&1; then
+    COMPOSE_CMD="docker compose"
+else
+    COMPOSE_CMD="docker-compose"
+fi
+log "Использую: $COMPOSE_CMD"
+
+# Запускаем Docker
+systemctl enable --now docker >/dev/null 2>&1 || service docker start >/dev/null 2>&1 || true
+sleep 2
 
 # === 6. Конфиги ===
 log "Создаю конфиги..."
 mkdir -p "$WORKDIR"
 cd "$WORKDIR"
 
-# telemt.toml
 cat > telemt.toml << EOF
 show_link = ["user1"]
 [general]
@@ -100,11 +103,10 @@ enabled = true
 weight = 10
 EOF
 
-# docker-compose.yml
-cat > docker-compose.yml << 'EOF'
+cat > docker-compose.yml << EOF
 services:
   telemt:
-    image: whn0thacked/telemt-docker:latest
+    image: $IMAGE
     container_name: telemt
     restart: unless-stopped
     environment:
@@ -124,53 +126,43 @@ services:
       - /tmp:rw,nosuid,nodev,noexec,size=16m
 EOF
 
-# === 7. Запуск ===
+# === 7. Образ ===
 log "Скачиваю образ..."
-if ! docker compose pull 2>&1; then
-    warn "⚠️  Не удалось скачать образ. Пробую запустить без обновления..."
-fi
+docker pull "$IMAGE" >/dev/null 2>&1 || err "❌ Не удалось скачать образ"
 
+# === 8. Запуск ===
 log "Запускаю контейнер..."
-if ! docker compose up -d 2>&1; then
+if ! $COMPOSE_CMD up -d 2>&1; then
     echo ""
     err "❌ Не удалось запустить контейнер!"
-    echo ""
-    echo "Возможные причины:"
-    echo "  • Порт 443 уже занят: ss -tulpn | grep :443"
-    echo "  • Docker не работает: systemctl status docker"
-    echo "  • Нет места: df -h"
-    echo ""
-    echo "Логи ошибки:"
-    docker compose logs --tail=10 2>/dev/null || echo "(нет логов)"
+    echo "Проверь: $COMPOSE_CMD logs"
     exit 1
 fi
-
-# Ждём запуска
 sleep 12
 
-# === 8. Ссылка ===
+# === 9. Формирование ссылки ===
 FULL_SECRET="ee${SECRET}${DOMAIN_HEX}"
 PROXY_LINK="tg://proxy?server=${PUBLIC_IP}&port=443&secret=${FULL_SECRET}"
 
-# === 9. Сохранение ===
+# === 10. Сохранение на сервере ===
 echo "$SECRET" > "$WORKDIR/secret.txt"
 echo "$PROXY_LINK" > "$WORKDIR/proxy-link.txt"
 chmod 600 "$WORKDIR/secret.txt" "$WORKDIR/proxy-link.txt"
 
-# === 10. Итог ===
+# === 11. Итоговый вывод ===
 echo ""
 echo "╔════════════════════════════════════════════╗"
 echo "║  🎉 Готово!                               ║"
 echo "╠════════════════════════════════════════════"
-echo "║  IP:     $PUBLIC_IP"
-echo "║  Домен:  $DOMAIN"
+echo "║  🌐 IP:     $PUBLIC_IP"
+echo "║  🎭 Домен:  $DOMAIN"
 echo "║"
 echo "║  🔗 Ссылка для Telegram:"
 echo "║  $PROXY_LINK"
 echo "║"
-echo "║  📁 Файлы в: $WORKDIR"
+echo "║  📁 Файлы сохранены в: $WORKDIR"
+echo "║     • proxy-link.txt — полная ссылка"
 echo "║     • secret.txt     — секрет"
-echo "║     • proxy-link.txt — ссылка"
 echo "║"
 echo "║  💡 Посмотреть ссылку позже:"
 echo "║     cat $WORKDIR/proxy-link.txt"
@@ -179,32 +171,17 @@ echo "║  🔄 Автозапуск: включён"
 echo "╚════════════════════════════════════════════╝"
 echo ""
 
-# === 11. Проверки ===
+# === 12. Проверки ===
 log "Проверяю..."
 
-# Маскировка
 HTTP=$(curl -s -o /dev/null -w "%{http_code}" \
     --resolve "${DOMAIN}:443:${PUBLIC_IP}" \
     "https://${DOMAIN}/" 2>/dev/null || echo "000")
-if [[ "$HTTP" =~ ^2|3 ]]; then
-    log "✅ Маскировка работает (HTTP $HTTP)"
-else
-    warn "⚠️  HTTP: $HTTP (DNS/TLS кэш может обновляться)"
-fi
+[[ "$HTTP" =~ ^2|3 ]] && log "✅ Маскировка (HTTP $HTTP)" || warn "⚠️  HTTP $HTTP"
 
-# Порт
-if ss -tulpn 2>/dev/null | grep -q ":443 "; then
-    log "✅ Порт 443 открыт"
-else
-    warn "⚠️  Порт 443 не найден. Открой: ufw allow 443/tcp"
-fi
+ss -tulpn 2>/dev/null | grep -q ":443 " && log "✅ Порт 443" || warn "⚠️  Порт 443"
 
-# Статус контейнера
-if docker compose ps 2>/dev/null | grep -q "Up"; then
-    log "✅ Контейнер работает"
-else
-    warn "⚠️  Контейнер не в статусе Up. Проверь: docker compose logs"
-fi
+$COMPOSE_CMD ps 2>/dev/null | grep -q "Up" && log "✅ Контейнер работает" || warn "⚠️  Контейнер"
 
 echo ""
 log "Всё готово! Подключай прокси в Telegram 🚀"

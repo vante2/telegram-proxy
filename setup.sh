@@ -1,32 +1,32 @@
 #!/usr/bin/env bash
 # 🚀 Telemt Auto — MTProxy с TLS-маскировкой
-# Надёжная версия: без проблем с кодировкой и скрытыми ошибками
+# Простая версия: минимум магии, максимум надёжности
 
-# === Настройки ===
-# Отключаем строгий выход по ошибке (будем проверять вручную)
+# Не выходим при первой ошибке — будем проверять вручную
 set -uo pipefail
 
-# === Локаль для корректного вывода кириллицы ===
+# Локаль для кириллицы
 export LANG=C.UTF-8
 export LC_ALL=C.UTF-8 2>/dev/null || true
 
-# === Цвета (безопасный вывод через %b) ===
+# Цвета
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 RED='\033[0;31m'
 NC='\033[0m'
 
-log() { printf "${GREEN}[✓]${NC} %b\n" "$1"; }
-warn() { printf "${YELLOW}[!]${NC} %b\n" "$1"; }
-err() { printf "${RED}[✗]${NC} %b\n" "$1"; exit 1; }
+# Простые функции вывода (без %b, чтобы не ломать ввод пользователя)
+log() { echo -e "${GREEN}[✓]${NC} $1"; }
+warn() { echo -e "${YELLOW}[!]${NC} $1"; }
+err() { echo -e "${RED}[✗]${NC} $1"; exit 1; }
 
 WORKDIR="/root/mtproxy-telemt"
 
-# === Заголовок ===
-printf "🚀 Telemt Auto — MTProxy за 1 минуту\n"
-printf "======================================\n\n"
+echo "🚀 Telemt Auto — MTProxy за 1 минуту"
+echo "======================================"
+echo ""
 
-# === 1. Авто-определение IP ===
+# === 1. IP ===
 log "Определяю публичный IP..."
 PUBLIC_IP=$(curl -s --max-time 5 https://ifconfig.me 2>/dev/null || \
             curl -s --max-time 5 https://ipinfo.io/ip 2>/dev/null || echo "")
@@ -35,33 +35,22 @@ if [[ -z "$PUBLIC_IP" || ! "$PUBLIC_IP" =~ ^[0-9.]+$ ]]; then
 fi
 log "Твой IP: $PUBLIC_IP"
 
-# === 2. Ввод домена ===
-printf "\n"
-read -p "🎭 Введите домен для маскировки (например, example.com): " DOMAIN
+# === 2. Домен (простой read без лишних символов) ===
+echo ""
+read -rp "🎭 Введите домен для маскировки: " DOMAIN
+# Убираем возможные пробелы и спецсимволы по краям
+DOMAIN=$(echo "$DOMAIN" | tr -d '\r' | xargs)
 if [[ -z "$DOMAIN" ]]; then
     err "Домен не может быть пустым."
 fi
 log "Маскируемся под: $DOMAIN"
 
-# === 3. Генерация секрета ===
+# === 3. Секрет ===
 SECRET=$(openssl rand -hex 16)
 warn "🔑 Секрет: $SECRET (сохрани!)"
 
-# === 4. Домен в HEX (универсальный способ) ===
-# Пробуем xxd, если нет — od, если нет — pure bash
-if command -v xxd &>/dev/null; then
-    DOMAIN_HEX=$(printf '%s' "$DOMAIN" | xxd -p | tr -d '\n')
-elif command -v od &>/dev/null; then
-    DOMAIN_HEX=$(printf '%s' "$DOMAIN" | od -An -tx1 | tr -d ' \n')
-else
-    # Pure bash fallback (медленнее, но работает везде)
-    DOMAIN_HEX=""
-    for ((i=0; i<${#DOMAIN}; i++)); do
-        char="${DOMAIN:$i:1}"
-        hex=$(printf '%x' "'$char")
-        DOMAIN_HEX+="$hex"
-    done
-fi
+# === 4. HEX домена (простой способ через od) ===
+DOMAIN_HEX=$(echo -n "$DOMAIN" | od -An -tx1 | tr -d ' \n')
 
 # === 5. Docker ===
 if ! command -v docker &>/dev/null; then
@@ -71,14 +60,19 @@ if ! command -v docker &>/dev/null; then
     curl -fsSL https://get.docker.com | sh >/dev/null 2>&1
 fi
 
-# Запускаем Docker и игнорируем ошибки, если он уже запущен
-systemctl enable --now docker >/dev/null 2>&1 || service docker start >/dev/null 2>&1 || true
+# Проверяем, запущен ли Docker
+if ! systemctl is-active --quiet docker 2>/dev/null; then
+    log "Запускаю Docker..."
+    systemctl start docker 2>/dev/null || service docker start 2>/dev/null || true
+    sleep 2
+fi
 
 # === 6. Конфиги ===
 log "Создаю конфиги..."
 mkdir -p "$WORKDIR"
 cd "$WORKDIR"
 
+# telemt.toml
 cat > telemt.toml << EOF
 show_link = ["user1"]
 [general]
@@ -106,6 +100,7 @@ enabled = true
 weight = 10
 EOF
 
+# docker-compose.yml
 cat > docker-compose.yml << 'EOF'
 services:
   telemt:
@@ -129,52 +124,63 @@ services:
       - /tmp:rw,nosuid,nodev,noexec,size=16m
 EOF
 
-# === 7. Запуск контейнера ===
+# === 7. Запуск ===
+log "Скачиваю образ..."
+if ! docker compose pull 2>&1; then
+    warn "⚠️  Не удалось скачать образ. Пробую запустить без обновления..."
+fi
+
 log "Запускаю контейнер..."
-if ! docker compose pull >/dev/null 2>&1; then
-    warn "⚠️  Не удалось обновить образ, пробую запустить локальный..."
+if ! docker compose up -d 2>&1; then
+    echo ""
+    err "❌ Не удалось запустить контейнер!"
+    echo ""
+    echo "Возможные причины:"
+    echo "  • Порт 443 уже занят: ss -tulpn | grep :443"
+    echo "  • Docker не работает: systemctl status docker"
+    echo "  • Нет места: df -h"
+    echo ""
+    echo "Логи ошибки:"
+    docker compose logs --tail=10 2>/dev/null || echo "(нет логов)"
+    exit 1
 fi
 
-if ! docker compose up -d >/dev/null 2>&1; then
-    err "Не удалось запустить контейнер. Проверь: docker compose logs"
-fi
+# Ждём запуска
+sleep 12
 
-# Ждём, пока контейнер поднимется
-sleep 10
-
-# === 8. Формирование ссылки ===
+# === 8. Ссылка ===
 FULL_SECRET="ee${SECRET}${DOMAIN_HEX}"
 PROXY_LINK="tg://proxy?server=${PUBLIC_IP}&port=443&secret=${FULL_SECRET}"
 
-# === 9. Сохранение на сервере ===
+# === 9. Сохранение ===
 echo "$SECRET" > "$WORKDIR/secret.txt"
 echo "$PROXY_LINK" > "$WORKDIR/proxy-link.txt"
 chmod 600 "$WORKDIR/secret.txt" "$WORKDIR/proxy-link.txt"
 
-# === 10. Итоговый вывод ===
-printf "\n"
-printf "╔════════════════════════════════════════════╗\n"
-printf "║  🎉 Готово!                               ║\n"
-printf "╠════════════════════════════════════════════\n"
-printf "║  🌐 IP:     %s\n" "$PUBLIC_IP"
-printf "║  🎭 Домен:  %s\n" "$DOMAIN"
-printf "║                                            ║\n"
-printf "║  🔗 Ссылка для Telegram:                  ║\n"
-printf "║  %s\n" "$PROXY_LINK"
-printf "║                                            ║\n"
-printf "║  📁 Файлы сохранены в: %s\n" "$WORKDIR"
-printf "║     • secret.txt     — секрет\n"
-printf "║     • proxy-link.txt — ссылка\n"
-printf "║                                            ║\n"
-printf "║  💡 Посмотреть ссылку позже:              ║\n"
-printf "║     cat %s/proxy-link.txt\n" "$WORKDIR"
-printf "║                                            ║\n"
-printf "║  🔄 Автозапуск: включён                   ║\n"
-printf "╚════════════════════════════════════════════╝\n"
-printf "\n"
+# === 10. Итог ===
+echo ""
+echo "╔════════════════════════════════════════════╗"
+echo "║  🎉 Готово!                               ║"
+echo "╠════════════════════════════════════════════"
+echo "║  IP:     $PUBLIC_IP"
+echo "║  Домен:  $DOMAIN"
+echo "║"
+echo "║  🔗 Ссылка для Telegram:"
+echo "║  $PROXY_LINK"
+echo "║"
+echo "║  📁 Файлы в: $WORKDIR"
+echo "║     • secret.txt     — секрет"
+echo "║     • proxy-link.txt — ссылка"
+echo "║"
+echo "║  💡 Посмотреть ссылку позже:"
+echo "║     cat $WORKDIR/proxy-link.txt"
+echo "║"
+echo "║  🔄 Автозапуск: включён"
+echo "╚════════════════════════════════════════════╝"
+echo ""
 
 # === 11. Проверки ===
-log "Проверяю работу..."
+log "Проверяю..."
 
 # Маскировка
 HTTP=$(curl -s -o /dev/null -w "%{http_code}" \
@@ -183,7 +189,7 @@ HTTP=$(curl -s -o /dev/null -w "%{http_code}" \
 if [[ "$HTTP" =~ ^2|3 ]]; then
     log "✅ Маскировка работает (HTTP $HTTP)"
 else
-    warn "⚠️  HTTP-код: $HTTP (DNS/TLS кэш может обновляться)"
+    warn "⚠️  HTTP: $HTTP (DNS/TLS кэш может обновляться)"
 fi
 
 # Порт
@@ -193,4 +199,12 @@ else
     warn "⚠️  Порт 443 не найден. Открой: ufw allow 443/tcp"
 fi
 
-printf "\n✅ Всё готово! Подключай прокси в Telegram 🚀\n"
+# Статус контейнера
+if docker compose ps 2>/dev/null | grep -q "Up"; then
+    log "✅ Контейнер работает"
+else
+    warn "⚠️  Контейнер не в статусе Up. Проверь: docker compose logs"
+fi
+
+echo ""
+log "Всё готово! Подключай прокси в Telegram 🚀"

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Telemt Auto — Автоматическая установка MTProxy с TLS-маскировкой
-# Версия: без указания версии docker-compose (максимальная совместимость)
+# Версия: стабильная, без ошибок YAML, чистый ввод, русский интерфейс
 
 set -uo pipefail
 export LANG=C.UTF-8
@@ -25,7 +25,7 @@ echo ""
 echo -e " ${GREEN}Telemt Auto${NC} — Установка MTProxy"
 echo "=================================="
 
-# === 1. Определение IP (локально) ===
+# === 1. Определение IP (локально, без внешних запросов) ===
 log "Определяю IP-адрес сервера..."
 PUBLIC_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
 
@@ -42,6 +42,7 @@ log "Твой IP: $PUBLIC_IP"
 echo ""
 printf "🎭 Введите домен для маскировки (например, example.com): "
 read -r DOMAIN
+# Безопасная очистка: убираем \r и крайние пробелы БЕЗ xargs (он ломает UTF-8)
 DOMAIN="${DOMAIN%$'\r'}"
 DOMAIN="${DOMAIN#"${DOMAIN%%[![:space:]]*}"}"
 DOMAIN="${DOMAIN%"${DOMAIN##*[![:space:]]}"}"
@@ -86,7 +87,7 @@ fi
 if [ "$COMPOSE_INSTALLED" = false ]; then
     log "Устанавливаю docker-compose..."
     if fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; then
-        warn "⚠️  dpkg заблокирован. Жду 30 секунд..."
+        warn "️  dpkg заблокирован. Жду 30 секунд..."
         sleep 30
     fi
     timeout 60 apt install -y -qq docker-compose >/dev/null 2>&1 && COMPOSE_INSTALLED=true
@@ -121,6 +122,7 @@ log "Создаю конфигурационные файлы..."
 mkdir -p "$WORKDIR"
 cd "$WORKDIR"
 
+# telemt.toml
 cat > telemt.toml << TOML_EOF
 show_link = ["user1"]
 
@@ -154,8 +156,8 @@ enabled = true
 weight = 10
 TOML_EOF
 
-# === docker-compose.yml БЕЗ указания версии (совместимость) ===
-cat > docker-compose.yml << 'YML_EOF'
+# docker-compose.yml (без version, максимальная совместимость)
+cat > docker-compose.yml << 'COMPOSE_EOF'
 services:
   telemt:
     image: whn0thacked/telemt-docker:latest
@@ -176,7 +178,12 @@ services:
     read_only: true
     tmpfs:
       - /tmp:rw,nosuid,nodev,noexec,size=16m
-YML_EOF
+COMPOSE_EOF
+
+# 🔧 АВТОМАТИЧЕСКАЯ ОЧИСТКА YAML (гарантирует отсутствие табов и \r)
+sed -i 's/\t/  /g' docker-compose.yml
+sed -i 's/[[:space:]]*$//' docker-compose.yml
+sed -i 's/\r$//' docker-compose.yml
 
 # === 7. Скачивание образа ===
 log "Скачиваю образ прокси..."
@@ -205,10 +212,10 @@ echo "╠═══════════════════════�
 echo "║  🌐 IP:     $PUBLIC_IP"
 echo "║  🎭 Домен:  $DOMAIN"
 echo "║                                            ║"
-echo "║  🔗 Ссылка для Telegram:                  ║"
+echo "║   Ссылка для Telegram:                  ║"
 echo "║  $PROXY_LINK"
 echo "║                                            ║"
-echo "║  📁 Файлы сохранены в: $WORKDIR"
+echo "║   Файлы сохранены в: $WORKDIR"
 echo "║     • proxy-link.txt — полная ссылка      ║"
 echo "║     • secret.txt     — только секрет      ║"
 echo "║                                            "
@@ -256,7 +263,7 @@ esac
 if ss -tulpn 2>/dev/null | grep -q ":443 "; then
     log "✅ Порт 443 открыт"
 else
-    warn "⚠️  Порт 443 не найден. Открой: ufw allow 443/tcp"
+    warn "️  Порт 443 не найден. Открой: ufw allow 443/tcp"
 fi
 
 if $COMPOSE_CMD ps 2>/dev/null | grep -q "Up"; then
@@ -266,7 +273,7 @@ else
 fi
 
 echo ""
-echo "📋 Справочник кодов маскировки:"
+echo " Справочник кодов маскировки:"
 echo "   200    = ✅ Идеально: сайт отвечает нормально"
 echo "   301/302/307 = ✅ Отлично: редирект, маскировка работает"
 echo "   400/403 = 🟡 Нормально: сайт блокирует прямые запросы, но прокси работает"
@@ -277,4 +284,4 @@ echo "💡 Важно: Даже при 400/403/000 Telegram может подк�
 echo "   Главное — контейнер в статусе 'Up' и порт 443 слушается."
 
 echo ""
-log "Всё готово! Подключай прокси в Telegram 🚀"
+log "Всё готово! Подключай прокси в Telegram "

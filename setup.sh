@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 🚀 Telemt Auto — MTProxy с TLS-маскировкой
-# Просто введи домен — всё остальное сделает скрипт
+# Секрет и ссылка сохраняются на сервере — не нужно запоминать!
 
 set -euo pipefail
 
@@ -30,7 +30,6 @@ log "Маскируемся под: $DOMAIN"
 
 # 3. Генерация секрета
 SECRET=$(openssl rand -hex 16)
-warn "🔑 Секрет: $SECRET (СОХРАНИ!)"
 
 # 4. Домен в HEX (для ссылки)
 DOMAIN_HEX=$(printf '%s' "$DOMAIN" | od -An -tx1 | tr -d ' \n')
@@ -98,30 +97,44 @@ EOF
 
 # 7. Запуск
 log "Запускаю..."
-docker compose pull -q
-docker compose up -d
+docker compose pull >/dev/null 2>&1
+docker compose up -d >/dev/null 2>&1
 sleep 10
 
-# 8. Ссылка
+# 8. Формирование ссылки
 FULL_SECRET="ee${SECRET}${DOMAIN_HEX}"
 PROXY_LINK="tg://proxy?server=${PUBLIC_IP}&port=443&secret=${FULL_SECRET}"
 
-# 9. Итог
+# 9. 🔥 Сохраняем секрет и ссылку в файлы
+echo "$SECRET" > secret.txt
+echo "$PROXY_LINK" > proxy-link.txt
+chmod 600 secret.txt proxy-link.txt  # только для root
+
+# 10. Итоговый вывод
 echo ""
 echo "╔════════════════════════════════════════════╗"
 echo "║  🎉 Готово!                               ║"
 echo "╠════════════════════════════════════════════"
-echo "║  IP:     $PUBLIC_IP"
-echo "║  Домен:  $DOMAIN"
-echo "║  Ссылка: $PROXY_LINK"
-echo "╠════════════════════════════════════════════"
-echo "║  Конфиги: $WORKDIR"
-echo "║  Автозапуск: включён"
+echo "║  🌐 IP:     $PUBLIC_IP"
+echo "║  🎭 Домен:  $DOMAIN"
+echo "║                                            ║"
+echo "║  🔗 Ссылка для Telegram:                  ║"
+echo "║  $PROXY_LINK"
+echo "║                                            ║"
+echo "║  📁 Файлы сохранены в: $WORKDIR"
+echo "║     • secret.txt     — твой секрет"
+echo "║     • proxy-link.txt — полная ссылка"
+echo "║                                            ║"
+echo "║  💡 Чтобы посмотреть ссылку позже:        ║"
+echo "║     cat /root/mtproxy-telemt/proxy-link.txt"
+echo "║                                            ║"
+echo "║  🔄 Автозапуск: включён                   ║"
 echo "╚════════════════════════════════════════════╝"
+echo ""
 
-# 10. Проверки
+# 11. Проверки
 HTTP=$(curl -s -o /dev/null -w "%{http_code}" \
     --resolve "${DOMAIN}:443:${PUBLIC_IP}" \
     "https://${DOMAIN}/" 2>/dev/null || echo "000")
-[[ "$HTTP" =~ ^2|3 ]] && log "✅ Маскировка OK" || warn "⚠️ HTTP $HTTP"
+[[ "$HTTP" =~ ^2|3 ]] && log "✅ Маскировка работает" || warn "⚠️ HTTP $HTTP"
 ss -tulpn | grep -q ":443 " && log "✅ Порт 443 открыт" || warn "⚠️ Порт 443 закрыт"

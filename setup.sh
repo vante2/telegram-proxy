@@ -4,16 +4,16 @@
 
 set -euo pipefail
 
-# Цвета
+# Цвета (используем printf для надёжности)
 GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; NC='\033[0m'
-log() { echo -e "${GREEN}[✓]${NC} $1"; }
-warn() { echo -e "${YELLOW}[!]${NC} $1"; }
-err() { echo -e "${RED}[✗]${NC} $1"; exit 1; }
+log() { printf "${GREEN}[✓]${NC} %s\n" "$1"; }
+warn() { printf "${YELLOW}[!]${NC} %s\n" "$1"; }
+err() { printf "${RED}[✗]${NC} %s\n" "$1"; exit 1; }
 
 WORKDIR="/root/mtproxy-telemt"
 
-echo "🚀 Telemt Auto — MTProxy за 1 минуту"
-echo "======================================"
+printf "🚀 Telemt Auto — MTProxy за 1 минуту\n"
+printf "======================================\n"
 
 # 1. Авто-определение IP
 log "Определяю публичный IP..."
@@ -23,7 +23,7 @@ PUBLIC_IP=$(curl -s --max-time 5 https://ifconfig.me 2>/dev/null || \
 log "Твой IP: $PUBLIC_IP"
 
 # 2. Ввод домена
-echo ""
+printf "\n"
 read -p "🎭 Введите домен для маскировки (например, example.com): " DOMAIN
 [[ -z "$DOMAIN" ]] && err "Домен не может быть пустым"
 log "Маскируемся под: $DOMAIN"
@@ -31,8 +31,8 @@ log "Маскируемся под: $DOMAIN"
 # 3. Генерация секрета
 SECRET=$(openssl rand -hex 16)
 
-# 4. Домен в HEX (для ссылки)
-DOMAIN_HEX=$(printf '%s' "$DOMAIN" | od -An -tx1 | tr -d ' \n')
+# 4. Домен в HEX (для ссылки) — используем xxd вместо od для надёжности
+DOMAIN_HEX=$(printf '%s' "$DOMAIN" | xxd -p | tr -d '\n')
 
 # 5. Docker
 if ! command -v docker &>/dev/null; then
@@ -108,29 +108,29 @@ PROXY_LINK="tg://proxy?server=${PUBLIC_IP}&port=443&secret=${FULL_SECRET}"
 # 9. 🔥 Сохраняем секрет и ссылку в файлы
 echo "$SECRET" > secret.txt
 echo "$PROXY_LINK" > proxy-link.txt
-chmod 600 secret.txt proxy-link.txt  # только для root
+chmod 600 secret.txt proxy-link.txt
 
-# 10. Итоговый вывод
-echo ""
-echo "╔════════════════════════════════════════════╗"
-echo "║  🎉 Готово!                               ║"
-echo "╠════════════════════════════════════════════"
-echo "║  🌐 IP:     $PUBLIC_IP"
-echo "║  🎭 Домен:  $DOMAIN"
-echo "║                                            ║"
-echo "║  🔗 Ссылка для Telegram:                  ║"
-echo "║  $PROXY_LINK"
-echo "║                                            ║"
-echo "║  📁 Файлы сохранены в: $WORKDIR"
-echo "║     • secret.txt     — твой секрет"
-echo "║     • proxy-link.txt — полная ссылка"
-echo "║                                            ║"
-echo "║  💡 Чтобы посмотреть ссылку позже:        ║"
-echo "║     cat /root/mtproxy-telemt/proxy-link.txt"
-echo "║                                            ║"
-echo "║  🔄 Автозапуск: включён                   ║"
-echo "╚════════════════════════════════════════════╝"
-echo ""
+# 10. Итоговый вывод (используем printf)
+printf "\n"
+printf "╔════════════════════════════════════════════╗\n"
+printf "║  🎉 Готово!                               ║\n"
+printf "╠════════════════════════════════════════════\n"
+printf "║  🌐 IP:     %s\n" "$PUBLIC_IP"
+printf "║  🎭 Домен:  %s\n" "$DOMAIN"
+printf "║                                            ║\n"
+printf "║  🔗 Ссылка для Telegram:                  ║\n"
+printf "║  %s\n" "$PROXY_LINK"
+printf "║                                            ║\n"
+printf "║  📁 Файлы сохранены в: %s\n" "$WORKDIR"
+printf "║     • secret.txt     — твой секрет\n"
+printf "║     • proxy-link.txt — полная ссылка\n"
+printf "║                                            ║\n"
+printf "║  💡 Чтобы посмотреть ссылку позже:        ║\n"
+printf "║     cat %s/proxy-link.txt\n" "$WORKDIR"
+printf "║                                            ║\n"
+printf "║  🔄 Автозапуск: включён                   ║\n"
+printf "╚════════════════════════════════════════════╝\n"
+printf "\n"
 
 # 11. Проверки
 HTTP=$(curl -s -o /dev/null -w "%{http_code}" \
